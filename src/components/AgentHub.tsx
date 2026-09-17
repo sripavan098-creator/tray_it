@@ -183,7 +183,7 @@ function MessagesPanel({ messages }: { messages: any[] }) {
                   {msg.body.replace(/\*/g, '').replace(/_/g, '')}
                   <div className="meta">
                     <span>{new Date(msg.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}</span>
-                    <span className={msg.status === 'read' ? 'ticks' : 'ticks pending'}>
+                    <span className={`ticks ${msg.status === 'read' ? 'read' : ''}`}>
                       {msg.status === 'read' ? '✓✓' : msg.status === 'delivered' ? '✓✓' : msg.status === 'sent' ? '✓' : '○'}
                     </span>
                   </div>

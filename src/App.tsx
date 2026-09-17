@@ -1,15 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { AppProvider, useApp } from './store';
+import { AppProvider, useApp, getRecommendations } from './store';
 import { Hero, Filters, Results, MenuBoard } from './components/Sections';
+import { MysteryMission } from './components/MysteryMission';
 import { AgentHub } from './components/AgentHub';
 import { AuthModal, CheckoutModal } from './components/Modals';
 import { MENU } from './data';
 
 function AppContent() {
-  const { state, tray, clearTray, signOut, toasts, removeToast } = useApp();
+  const { state, tray, clearTray, signOut, toasts, removeToast, filters, mission, setMission } = useApp();
   const [authOpen, setAuthOpen] = useState(false);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
+  const [recommendShown, setRecommendShown] = useState(false);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -19,6 +21,22 @@ function AppContent() {
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  // Initialize mission when results are shown
+  useEffect(() => {
+    if (recommendShown && !mission.active) {
+      const recs = getRecommendations(filters);
+      if (recs.length > 0) {
+        setMission({
+          active: true,
+          step: 1,
+          originalItem: recs[0].item,
+          originalBudget: filters.budget,
+          currentBudget: filters.budget,
+        });
+      }
+    }
+  }, [recommendShown]);
 
   const user = state.user;
   const initials = user ? user.name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase() : '?';
@@ -45,14 +63,12 @@ function AppContent() {
     if (tray.length > 0) clearTray();
   };
 
-  // Determine counter from tray items
   const getCounter = () => {
     if (tray.length === 0) return 'Main Canteen';
     const locations = tray.map(item => {
       const menu = MENU.find(m => m.id === item.menuId);
       return menu?.loc || 'Main Canteen';
     });
-    // Most common
     const counts: Record<string, number> = {};
     locations.forEach(l => { counts[l] = (counts[l] || 0) + 1; });
     return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
@@ -114,13 +130,17 @@ function AppContent() {
         </div>
       )}
 
-      <Results />
+      <ResultsWithCallback onShow={() => setRecommendShown(true)} />
+
+      {/* Mystery Mission */}
+      {mission.active && <MysteryMission />}
+
       <AgentHub />
       <MenuBoard />
 
       {/* Footer */}
       <footer className="bg-[var(--board-dark)] text-[#a9a291] text-center py-7 px-[6vw] text-sm border-t border-white/10">
-        Built as a demo of <strong>tray-it</strong>, your intelligent campus dining agent. Recommendations, orders, payments and notifications all come from the menu and rules in this app. · Edit the <code className="font-mono">MENU</code> array to plug in your own canteen's real data.
+        Built as a demo of <strong>tray-it</strong>, your intelligent campus dining agent. All recommendations sourced exclusively from the live canteen menu — nothing is invented. · Edit the <code className="font-mono">MENU</code> array to plug in your own canteen's real data.
       </footer>
 
       {/* Modals */}
@@ -134,6 +154,11 @@ function AppContent() {
       />
     </div>
   );
+}
+
+// Wrapper to detect when results are shown
+function ResultsWithCallback({ onShow }: { onShow: () => void }) {
+  return <Results onShow={onShow} />;
 }
 
 export default function App() {

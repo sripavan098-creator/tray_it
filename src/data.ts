@@ -57,3 +57,9 @@ export const METHOD_LABELS: Record<string, string> = {
   wallet: 'tray-it credits',
   counter: 'Pay at counter',
 };
+
+export const CANTEEN_WALK_MINUTES: Record<string, number> = {
+  'Main Canteen': 2,
+  'Food Court': 3,
+  'Block-A Canteen': 5,
+};
