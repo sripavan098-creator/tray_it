@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useReducer, useCallback, ReactNode, useState } from 'react';
-import { AppState, User, Session, Order, Payment, Message, LogEntry, Filters, MenuItem, OrderItem } from './types';
+import React, { createContext, useContext, useReducer, useCallback, ReactNode, useState, useEffect, useRef } from 'react';
+import { AppState, User, Session, Order, Payment, Message, LogEntry, Filters, MenuItem, OrderItem, Watcher, ConfirmationRequest } from './types';
 import { MENU, ORDER_FLOW, STATUS_LABELS, METHOD_LABELS, CANTEEN_WALK_MINUTES } from './data';
+import { sendOTPEmail, sendOrderConfirmationEmail, sendPaymentReceiptEmail, isEmailConfigured } from './services/emailService';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const uid = (p = 'id') => p + '_' + Math.random().toString(36).slice(2, 9);
@@ -15,6 +16,8 @@ const initialState: AppState = {
   wallet: 250,
   log: [],
   consents: { whatsapp: true, sms: true },
+  watchers: [],
+  confirmations: [],
 };
 
 type Action =
@@ -28,7 +31,12 @@ type Action =
   | { type: 'UPDATE_MESSAGE'; message: Message }
   | { type: 'ADD_LOG'; entry: LogEntry }
   | { type: 'SET_WALLET'; amount: number }
-  | { type: 'SET_CONSENT'; channel: 'whatsapp' | 'sms'; value: boolean };
+  | { type: 'SET_CONSENT'; channel: 'whatsapp' | 'sms'; value: boolean }
+  | { type: 'ADD_WATCHER'; watcher: Watcher }
+  | { type: 'UPDATE_WATCHER'; watcher: Watcher }
+  | { type: 'REMOVE_WATCHER'; id: string }
+  | { type: 'ADD_CONFIRMATION'; confirmation: ConfirmationRequest }
+  | { type: 'UPDATE_CONFIRMATION'; confirmation: ConfirmationRequest };
 
 function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -43,6 +51,11 @@ function reducer(state: AppState, action: Action): AppState {
     case 'ADD_LOG': return { ...state, log: [action.entry, ...state.log].slice(0, 140) };
     case 'SET_WALLET': return { ...state, wallet: action.amount };
     case 'SET_CONSENT': return { ...state, consents: { ...state.consents, [action.channel]: action.value } };
+    case 'ADD_WATCHER': return { ...state, watchers: [action.watcher, ...state.watchers] };
+    case 'UPDATE_WATCHER': return { ...state, watchers: state.watchers.map(w => w.id === action.watcher.id ? action.watcher : w) };
+    case 'REMOVE_WATCHER': return { ...state, watchers: state.watchers.filter(w => w.id !== action.id) };
+    case 'ADD_CONFIRMATION': return { ...state, confirmations: [action.confirmation, ...state.confirmations] };
+    case 'UPDATE_CONFIRMATION': return { ...state, confirmations: state.confirmations.map(c => c.id === action.confirmation.id ? action.confirmation : c) };
     default: return state;
   }
 }
@@ -141,8 +154,8 @@ interface AppContextType {
   removeFromTray: (menuId: string) => void;
   clearTray: () => void;
   // Auth
-  requestOtp: (phone: string) => Promise<string>;
-  verifyOtp: (phone: string, code: string, name: string) => Promise<User>;
+  requestOtp: (phone: string, email: string, name: string) => Promise<string>;
+  verifyOtp: (phone: string, email: string, code: string, name: string) => Promise<User>;
   signOut: () => void;
   // Orders
   placeOrder: (items: OrderItem[], total: number, counter: string, slot: string, method: string, onStep?: (step: any) => void) => Promise<{ ok: boolean; order?: Order; payment?: Payment; error?: string }>;
@@ -163,6 +176,15 @@ interface AppContextType {
   resetMission: () => void;
   // Natural language
   applyNaturalRequest: (text: string) => void;
+  // Watcher
+  addWatcher: (menuId: string, maxPrice: number, notifyVia: 'email' | 'sms' | 'both', autoOrder: boolean) => void;
+  removeWatcher: (id: string) => void;
+  toggleWatcher: (id: string) => void;
+  simulateWatcherTrigger: () => void;
+  // Confirmation
+  pendingConfirmation: ConfirmationRequest | null;
+  confirmOrder: (confirmationId: string, otp: string) => Promise<boolean>;
+  cancelConfirmation: (confirmationId: string) => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -178,7 +200,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [filters, setFiltersState] = useState<Filters>({ pref: '', type: '', meal: '', beverage: '', budget: 100 });
   const [tray, setTray] = useState<OrderItem[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [otpData, setOtpData] = useState<{ phone: string; code: string } | null>(null);
+  const [otpData, setOtpData] = useState<{ phone: string; email: string; code: string } | null>(null);
   const [mission, setMissionState] = useState<MissionState>(defaultMission);
 
   const setFilters = useCallback((f: Partial<Filters>) => {
@@ -229,17 +251,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Auth
-  const requestOtp = useCallback(async (phone: string): Promise<string> => {
+  const requestOtp = useCallback(async (phone: string, email: string, name: string): Promise<string> => {
     const code = String(Math.floor(100000 + Math.random() * 900000));
-    setOtpData({ phone, code });
+    setOtpData({ phone, email, code });
+    
+    // Send real email with OTP
+    const emailSent = await sendOTPEmail(email, code, name);
+    if (emailSent) {
+      addLog('email.otp', `OTP sent to ${email}`, 'ok', 500);
+    } else {
+      addLog('email.otp', `Email not configured - using demo mode`, 'run', 100);
+    }
+    
     await sleep(520);
     return code;
-  }, []);
+  }, [addLog]);
 
-  const verifyOtp = useCallback(async (phone: string, code: string, name: string): Promise<User> => {
-    if (!otpData || otpData.phone !== phone) throw new Error('No OTP was requested for this number.');
+  const verifyOtp = useCallback(async (phone: string, email: string, code: string, name: string): Promise<User> => {
+    if (!otpData || otpData.phone !== phone || otpData.email !== email) throw new Error('No OTP was requested for this account.');
     if (otpData.code !== String(code).trim()) throw new Error("That code doesn't match.");
-    const user: User = { id: uid('usr'), phone, name: name.trim() || 'Student', createdAt: nowISO() };
+    const user: User = { id: uid('usr'), phone, email, name: name.trim() || 'Student', createdAt: nowISO() };
     const session: Session = { userId: user.id, token: uid('tok'), expiresAt: Date.now() + 7 * 864e5 };
     dispatch({ type: 'SET_USER', user });
     dispatch({ type: 'SET_SESSION', session });
@@ -319,6 +350,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await step('notify.whatsapp', 'sending order confirmation', async () => {
       const body = `🍽️ *tray-it order confirmed*\n\nOrder *#${order.id}* · ${counter}\n${items.map(i => `• ${i.name} — ₹${i.price}`).join('\n')}\nTotal *₹${total}*\nPickup: ${slot}\n\nShow code *${order.code}* at the counter.`;
       await sendMessage('whatsapp', state.user ? '+91 ' + state.user.phone : '+91 ••••• •••••', body, 'order_placed', order.id);
+      
+      // Send email confirmation
+      if (state.user?.email) {
+        const emailSent = await sendOrderConfirmationEmail(
+          state.user.email,
+          state.user.name,
+          order.id,
+          items.map(i => i.name),
+          total,
+          counter,
+          order.code
+        );
+        if (emailSent) {
+          addLog('email.order', `Confirmation sent to ${state.user.email}`, 'ok', 400);
+        }
+      }
       return true;
     });
 
@@ -369,10 +416,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const confirmed = { ...order, status: 'CONFIRMED', paymentId: captured.id, history: [...order.history, { status: 'CONFIRMED', at: nowISO() }] };
     dispatch({ type: 'UPDATE_ORDER', order: confirmed });
 
-    await step('notify.receipt', 'sending receipt on WhatsApp + SMS', async () => {
+    await step('notify.receipt', 'sending receipt on WhatsApp + SMS + Email', async () => {
       const body = `✅ Payment received — ₹${total}\nOrder #${order.id}\nMethod: ${METHOD_LABELS[method]}\nRef: ${captured.reference}\n\nThanks for eating with tray-it! 🌿`;
       await sendMessage('whatsapp', state.user ? '+91 ' + state.user.phone : '', body, 'payment_receipt', order.id);
       await sendMessage('sms', state.user ? '+91 ' + state.user.phone : '', body, 'payment_receipt', order.id);
+      
+      // Send email receipt
+      if (state.user?.email) {
+        const emailSent = await sendPaymentReceiptEmail(
+          state.user.email,
+          state.user.name,
+          order.id,
+          total,
+          METHOD_LABELS[method],
+          captured.reference || ''
+        );
+        if (emailSent) {
+          addLog('email.receipt', `Receipt sent to ${state.user.email}`, 'ok', 350);
+        }
+      }
       return true;
     });
 
@@ -477,6 +539,188 @@ export function AppProvider({ children }: { children: ReactNode }) {
     addToast('✓ Request applied', 'Preferences updated from your description.', 'ok');
   }, [setFilters, addLog, addToast]);
 
+  // ── Watcher logic ──
+  const [pendingConfirmation, setPendingConfirmation] = useState<ConfirmationRequest | null>(null);
+  const watcherIntervals = useRef<Record<string, number>>({});
+
+  const addWatcher = useCallback((menuId: string, maxPrice: number, notifyVia: 'email' | 'sms' | 'both', autoOrder: boolean) => {
+    const item = MENU.find(m => m.id === menuId);
+    if (!item) return;
+    const watcher: Watcher = {
+      id: uid('watch'),
+      menuId,
+      itemName: item.name,
+      maxPrice,
+      notifyVia,
+      autoOrder,
+      active: true,
+      createdAt: nowISO(),
+      lastCheckedAt: null,
+      triggeredAt: null,
+    };
+    dispatch({ type: 'ADD_WATCHER', watcher });
+    addLog('watcher.create', `watching ${item.name} ≤ ₹${maxPrice}`, 'ok', 80);
+    addToast('👁️ Watcher created', `Watching ${item.name} — you'll be notified when available.`, 'ok');
+  }, [addLog, addToast]);
+
+  const removeWatcher = useCallback((id: string) => {
+    dispatch({ type: 'REMOVE_WATCHER', id });
+    if (watcherIntervals.current[id]) {
+      clearInterval(watcherIntervals.current[id]);
+      delete watcherIntervals.current[id];
+    }
+    addLog('watcher.remove', `stopped watching`, 'ok', 40);
+  }, [addLog]);
+
+  const toggleWatcher = useCallback((id: string) => {
+    const w = state.watchers.find(w => w.id === id);
+    if (!w) return;
+    dispatch({ type: 'UPDATE_WATCHER', watcher: { ...w, active: !w.active } });
+    addLog('watcher.toggle', `${w.itemName} ${!w.active ? 'resumed' : 'paused'}`, 'ok', 30);
+  }, [state.watchers, addLog]);
+
+  // Trigger a confirmation request (simulates backend dispatching email/SMS)
+  const triggerConfirmation = useCallback(async (watcher: Watcher) => {
+    const item = MENU.find(m => m.id === watcher.menuId);
+    if (!item) return;
+
+    const channel = watcher.notifyVia === 'email' ? 'email' : 'sms';
+    const otp = String(Math.floor(100000 + Math.random() * 900000));
+    const confirmation: ConfirmationRequest = {
+      id: uid('conf'),
+      watcherId: watcher.id,
+      orderId: null,
+      item: { menuId: item.id, name: item.name, price: item.price },
+      total: item.price,
+      counter: item.loc,
+      method: 'wallet',
+      otp,
+      channel: channel as 'email' | 'sms',
+      status: 'pending',
+      createdAt: nowISO(),
+      expiresAt: Date.now() + 5 * 60 * 1000, // 5 minutes
+      confirmedAt: null,
+    };
+
+    dispatch({ type: 'ADD_CONFIRMATION', confirmation });
+    setPendingConfirmation(confirmation);
+
+    // Send simulated notification (email simulated via SMS channel for demo)
+    const body = channel === 'email'
+      ? `📧 [EMAIL] tray-it found your ${item.name}!\n\nPrice: ₹${item.price} at ${item.loc}\n\nYour confirmation code: ${otp}\n\n⏰ This expires in 5 minutes.\n\nClick the link below to confirm the deduction from your wallet:\n[Confirm Order](tray-it://confirm/${confirmation.id})`
+      : `📱 tray-it: ${item.name} available for ₹${item.price} at ${item.loc}! Reply with code ${otp} within 5 min to confirm. Deduct from wallet?`;
+
+    await sendMessage('sms', state.user ? (channel === 'email' ? state.user.phone + '@campus.edu' : '+91 ' + state.user.phone) : 'you', body, 'watcher_alert', null);
+    addLog('notify.confirmation', `sent ${channel} with OTP ${otp}`, 'ok', 320);
+    addToast(channel === 'email' ? '📧 Email sent' : '📱 SMS sent', `Confirmation code: ${otp} (expires in 5 min)`, 'ok');
+
+    // Mark watcher as triggered
+    const updatedWatcher = { ...watcher, triggeredAt: nowISO(), active: false };
+    dispatch({ type: 'UPDATE_WATCHER', watcher: updatedWatcher });
+
+    // Auto-expire after 5 minutes
+    setTimeout(() => {
+      setPendingConfirmation(prev => {
+        if (prev && prev.id === confirmation.id && prev.status === 'pending') {
+          const expired = { ...prev, status: 'expired' as const };
+          dispatch({ type: 'UPDATE_CONFIRMATION', confirmation: expired });
+          addLog('confirmation.expire', `#${confirmation.id} expired — no response`, 'err', 50);
+          addToast('⏰ Confirmation expired', 'The order was not confirmed in time.', 'err');
+          // Re-activate watcher
+          dispatch({ type: 'UPDATE_WATCHER', watcher: { ...updatedWatcher, active: true, triggeredAt: null } });
+          return null;
+        }
+        return prev;
+      });
+    }, 5 * 60 * 1000);
+  }, [state.user, sendMessage, addLog, addToast]);
+
+  const confirmOrder = useCallback(async (confirmationId: string, otp: string): Promise<boolean> => {
+    const conf = state.confirmations.find(c => c.id === confirmationId);
+    if (!conf) return false;
+    if (conf.status !== 'pending') return false;
+    if (Date.now() > conf.expiresAt) {
+      dispatch({ type: 'UPDATE_CONFIRMATION', confirmation: { ...conf, status: 'expired' } });
+      addToast('⏰ Expired', 'This confirmation has expired.', 'err');
+      return false;
+    }
+    if (conf.otp !== otp.trim()) {
+      addToast('❌ Wrong code', 'The confirmation code does not match.', 'err');
+      return false;
+    }
+
+    // Confirmed! Place the order
+    const confirmed = { ...conf, status: 'confirmed' as const, confirmedAt: nowISO() };
+    dispatch({ type: 'UPDATE_CONFIRMATION', confirmation: confirmed });
+    setPendingConfirmation(null);
+
+    addLog('confirmation.verify', `OTP verified for ${conf.item.name}`, 'ok', 180);
+    addToast('✅ Confirmed!', `Placing order for ${conf.item.name}…`, 'ok');
+
+    // Actually place the order
+    const result = await placeOrder(
+      [conf.item],
+      conf.total,
+      conf.counter,
+      'ASAP',
+      conf.method,
+    );
+
+    if (result.ok && result.order) {
+      const withOrderId = { ...confirmed, orderId: result.order.id };
+      dispatch({ type: 'UPDATE_CONFIRMATION', confirmation: withOrderId });
+      addLog('watcher.order', `#${result.order.id} placed via watcher`, 'ok', 200);
+      addToast('🎉 Order placed!', `#${result.order.id} — ${conf.item.name} at ${conf.counter}`, 'ok');
+    }
+
+    return result.ok;
+  }, [state.confirmations, placeOrder, addLog, addToast]);
+
+  const cancelConfirmation = useCallback((confirmationId: string) => {
+    const conf = state.confirmations.find(c => c.id === confirmationId);
+    if (!conf || conf.status !== 'pending') return;
+    dispatch({ type: 'UPDATE_CONFIRMATION', confirmation: { ...conf, status: 'cancelled' } });
+    setPendingConfirmation(null);
+    addLog('confirmation.cancel', `#${confirmationId} cancelled by user`, 'ok', 60);
+    addToast('↩️ Cancelled', 'Confirmation dismissed. Watcher re-activated.', 'err');
+    // Re-activate watcher
+    const watcher = state.watchers.find(w => w.id === conf.watcherId);
+    if (watcher) {
+      dispatch({ type: 'UPDATE_WATCHER', watcher: { ...watcher, active: true, triggeredAt: null } });
+    }
+  }, [state.confirmations, state.watchers, addLog, addToast]);
+
+  // Simulate a watcher trigger (for demo)
+  const simulateWatcherTrigger = useCallback(() => {
+    const activeWatcher = state.watchers.find(w => w.active);
+    if (!activeWatcher) {
+      addToast('⚠️ No active watchers', 'Create and activate a watcher first.', 'err');
+      return;
+    }
+    addLog('watcher.demo', `simulating availability for ${activeWatcher.itemName}`, 'ok', 60);
+    triggerConfirmation(activeWatcher);
+  }, [state.watchers, triggerConfirmation, addLog, addToast]);
+
+  // Background watcher polling simulation
+  useEffect(() => {
+    const interval = setInterval(() => {
+      state.watchers.forEach(w => {
+        if (!w.active) return;
+        const item = MENU.find(m => m.id === w.menuId);
+        if (!item) return;
+        // Simulate checking
+        const updated = { ...w, lastCheckedAt: nowISO() };
+        dispatch({ type: 'UPDATE_WATCHER', watcher: updated });
+        // Check if available and within budget
+        if (item.available && item.price <= w.maxPrice) {
+          addLog('watcher.trigger', `${item.name} now available at ₹${item.price}`, 'ok', 120);
+          triggerConfirmation(w);
+        }
+      });
+    }, 8000); // Check every 8 seconds
+    return () => clearInterval(interval);
+  }, [state.watchers, addLog, triggerConfirmation]);
+
   return (
     <AppContext.Provider value={{
       state, filters, setFilters, tray, addToTray, removeFromTray, clearTray,
@@ -486,6 +730,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       toasts, addToast, removeToast,
       mission, setMission, resetMission,
       applyNaturalRequest,
+      addWatcher, removeWatcher, toggleWatcher, simulateWatcherTrigger,
+      pendingConfirmation, confirmOrder, cancelConfirmation,
     }}>
       {children}
     </AppContext.Provider>

@@ -13,6 +13,7 @@ export interface MenuItem {
 export interface User {
   id: string;
   phone: string;
+  email: string;
   name: string;
   createdAt: string;
 }
@@ -94,6 +95,8 @@ export interface AppState {
   wallet: number;
   log: LogEntry[];
   consents: { whatsapp: boolean; sms: boolean };
+  watchers: Watcher[];
+  confirmations: ConfirmationRequest[];
 }
 
 export interface Filters {
@@ -108,4 +111,33 @@ export interface Recommendation {
   item: MenuItem;
   score: number;
   reason: string;
+}
+
+export interface Watcher {
+  id: string;
+  menuId: string;
+  itemName: string;
+  maxPrice: number;
+  notifyVia: 'email' | 'sms' | 'both';
+  autoOrder: boolean;
+  active: boolean;
+  createdAt: string;
+  lastCheckedAt: string | null;
+  triggeredAt: string | null;
+}
+
+export interface ConfirmationRequest {
+  id: string;
+  watcherId: string;
+  orderId: string | null;
+  item: OrderItem;
+  total: number;
+  counter: string;
+  method: string;
+  otp: string;
+  channel: 'email' | 'sms';
+  status: 'pending' | 'confirmed' | 'expired' | 'cancelled';
+  createdAt: string;
+  expiresAt: number;
+  confirmedAt: string | null;
 }

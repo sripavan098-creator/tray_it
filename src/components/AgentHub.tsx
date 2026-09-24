@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useApp } from '../store';
 import { ORDER_FLOW, STATUS_LABELS, METHOD_LABELS } from '../data';
+import { WatcherPanel } from './Watcher';
 
-type Tab = 'orders' | 'messages' | 'payments' | 'activity' | 'account';
+type Tab = 'orders' | 'watchers' | 'messages' | 'payments' | 'activity' | 'account';
 
 export function AgentHub() {
   const [activeTab, setActiveTab] = useState<Tab>('orders');
@@ -10,6 +11,7 @@ export function AgentHub() {
 
   const tabs: { key: Tab; label: string; icon: string; count?: number }[] = [
     { key: 'orders', label: 'Orders', icon: '🧾', count: state.orders.length },
+    { key: 'watchers', label: 'Item Watchers', icon: '👁️', count: state.watchers.filter(w => w.active).length },
     { key: 'messages', label: 'WhatsApp & SMS', icon: '💬', count: state.messages.length },
     { key: 'payments', label: 'Payments', icon: '💳', count: state.payments.length },
     { key: 'activity', label: 'Agent activity', icon: '🤖' },
@@ -41,6 +43,7 @@ export function AgentHub() {
         {/* Panel */}
         <div className="bg-white border border-[#ded6c2] rounded-2xl p-5 min-h-[340px] shadow-lg">
           {activeTab === 'orders' && <OrdersPanel orders={state.orders} onCancel={cancelOrder} onCollect={collectOrder} onRetry={retryPayment} />}
+          {activeTab === 'watchers' && <WatcherPanel />}
           {activeTab === 'messages' && <MessagesPanel messages={state.messages} />}
           {activeTab === 'payments' && <PaymentsPanel payments={state.payments} />}
           {activeTab === 'activity' && <ActivityPanel log={state.log} />}
@@ -290,6 +293,20 @@ function AccountPanel({ state, onTopUp, onConsent, onSignOut }: {
   onSignOut: () => void;
 }) {
   const user = state.user;
+  const [emailConfig, setEmailConfig] = useState({
+    serviceId: (window as any).__EMAILJS_SERVICE_ID__ || '',
+    templateId: (window as any).__EMAILJS_TEMPLATE_ID__ || '',
+    publicKey: (window as any).__EMAILJS_PUBLIC_KEY__ || '',
+  });
+  const [configSaved, setConfigSaved] = useState(false);
+
+  const handleSaveConfig = () => {
+    (window as any).__EMAILJS_SERVICE_ID__ = emailConfig.serviceId;
+    (window as any).__EMAILJS_TEMPLATE_ID__ = emailConfig.templateId;
+    (window as any).__EMAILJS_PUBLIC_KEY__ = emailConfig.publicKey;
+    setConfigSaved(true);
+    setTimeout(() => setConfigSaved(false), 3000);
+  };
 
   if (!user) {
     return (
@@ -364,6 +381,48 @@ function AccountPanel({ state, onTopUp, onConsent, onSignOut }: {
       <button className="text-sm font-semibold px-4 py-2 rounded-lg border border-[#c9c2b3] bg-white text-[var(--ink-soft)] cursor-pointer hover:border-[var(--ink)] hover:text-[var(--ink)]" onClick={onSignOut}>
         Sign out
       </button>
+
+      {/* Email Configuration */}
+      <div className="mt-6 border-t border-[#ded6c2] pt-5">
+        <h4 className="font-bold text-sm mb-3">📧 Email Configuration</h4>
+        <p className="text-xs text-[var(--ink-soft)] mb-3 leading-relaxed">
+          Configure EmailJS to send real OTP emails, order confirmations, and payment receipts. 
+          Get your credentials from <a href="https://www.emailjs.com/" target="_blank" rel="noopener noreferrer" className="text-[var(--chili)] underline">emailjs.com</a>.
+        </p>
+        <div className="space-y-2">
+          <input
+            type="text"
+            placeholder="Service ID"
+            value={emailConfig.serviceId}
+            onChange={e => setEmailConfig({ ...emailConfig, serviceId: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-[#c9c2b3] font-mono text-xs bg-white focus:border-[var(--chili)] focus:outline-none"
+          />
+          <input
+            type="text"
+            placeholder="Template ID"
+            value={emailConfig.templateId}
+            onChange={e => setEmailConfig({ ...emailConfig, templateId: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-[#c9c2b3] font-mono text-xs bg-white focus:border-[var(--chili)] focus:outline-none"
+          />
+          <input
+            type="text"
+            placeholder="Public Key"
+            value={emailConfig.publicKey}
+            onChange={e => setEmailConfig({ ...emailConfig, publicKey: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-[#c9c2b3] font-mono text-xs bg-white focus:border-[var(--chili)] focus:outline-none"
+          />
+          <button
+            className="btn btn-primary text-sm py-2 px-4"
+            onClick={handleSaveConfig}
+          >
+            {configSaved ? '✓ Saved!' : 'Save Configuration'}
+          </button>
+        </div>
+        <div className="mt-3 p-3 bg-[#f7f3e8] rounded-lg text-xs text-[var(--ink-soft)] leading-relaxed">
+          <strong>Email Template Variables:</strong><br />
+          <code className="font-mono text-[.65rem]">to_email, to_name, otp_code, order_id, items, total, counter, pickup_code, amount, method, reference, message</code>
+        </div>
+      </div>
     </div>
   );
 }
