@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useApp } from '../store';
 import { ORDER_FLOW, STATUS_LABELS, METHOD_LABELS } from '../data';
+import { WatcherPanel } from './Watcher';
 
-type Tab = 'orders' | 'messages' | 'payments' | 'activity' | 'account';
+type Tab = 'orders' | 'watchers' | 'messages' | 'payments' | 'activity' | 'account';
 
 export function AgentHub() {
   const [activeTab, setActiveTab] = useState<Tab>('orders');
@@ -10,6 +11,7 @@ export function AgentHub() {
 
   const tabs: { key: Tab; label: string; icon: string; count?: number }[] = [
     { key: 'orders', label: 'Orders', icon: '🧾', count: state.orders.length },
+    { key: 'watchers', label: 'Item Watchers', icon: '👁️', count: state.watchers.filter(w => w.active).length },
     { key: 'messages', label: 'WhatsApp & SMS', icon: '💬', count: state.messages.length },
     { key: 'payments', label: 'Payments', icon: '💳', count: state.payments.length },
     { key: 'activity', label: 'Agent activity', icon: '🤖' },
@@ -41,6 +43,7 @@ export function AgentHub() {
         {/* Panel */}
         <div className="bg-white border border-[#ded6c2] rounded-2xl p-5 min-h-[340px] shadow-lg">
           {activeTab === 'orders' && <OrdersPanel orders={state.orders} onCancel={cancelOrder} onCollect={collectOrder} onRetry={retryPayment} />}
+          {activeTab === 'watchers' && <WatcherPanel />}
           {activeTab === 'messages' && <MessagesPanel messages={state.messages} />}
           {activeTab === 'payments' && <PaymentsPanel payments={state.payments} />}
           {activeTab === 'activity' && <ActivityPanel log={state.log} />}

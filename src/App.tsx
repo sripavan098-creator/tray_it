@@ -4,6 +4,7 @@ import { Hero, Filters, Results, MenuBoard } from './components/Sections';
 import { MysteryMission } from './components/MysteryMission';
 import { AgentHub } from './components/AgentHub';
 import { AuthModal, CheckoutModal } from './components/Modals';
+import { ConfirmationModal } from './components/Watcher';
 import { MENU } from './data';
 
 function AppContent() {
@@ -152,6 +153,7 @@ function AppContent() {
         total={trayTotal}
         counter={getCounter()}
       />
+      <ConfirmationModal />
     </div>
   );
 }
