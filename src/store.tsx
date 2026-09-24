@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useReducer, useCallback, ReactNode, useState, useEffect, useRef } from 'react';
 import { AppState, User, Session, Order, Payment, Message, LogEntry, Filters, MenuItem, OrderItem, Watcher, ConfirmationRequest } from './types';
 import { MENU, ORDER_FLOW, STATUS_LABELS, METHOD_LABELS, CANTEEN_WALK_MINUTES } from './data';
+import { sendOTPEmail, sendOrderConfirmationEmail, sendPaymentReceiptEmail, isEmailConfigured } from './services/emailService';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const uid = (p = 'id') => p + '_' + Math.random().toString(36).slice(2, 9);
@@ -153,8 +154,8 @@ interface AppContextType {
   removeFromTray: (menuId: string) => void;
   clearTray: () => void;
   // Auth
-  requestOtp: (phone: string) => Promise<string>;
-  verifyOtp: (phone: string, code: string, name: string) => Promise<User>;
+  requestOtp: (phone: string, email: string, name: string) => Promise<string>;
+  verifyOtp: (phone: string, email: string, code: string, name: string) => Promise<User>;
   signOut: () => void;
   // Orders
   placeOrder: (items: OrderItem[], total: number, counter: string, slot: string, method: string, onStep?: (step: any) => void) => Promise<{ ok: boolean; order?: Order; payment?: Payment; error?: string }>;
@@ -199,7 +200,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [filters, setFiltersState] = useState<Filters>({ pref: '', type: '', meal: '', beverage: '', budget: 100 });
   const [tray, setTray] = useState<OrderItem[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [otpData, setOtpData] = useState<{ phone: string; code: string } | null>(null);
+  const [otpData, setOtpData] = useState<{ phone: string; email: string; code: string } | null>(null);
   const [mission, setMissionState] = useState<MissionState>(defaultMission);
 
   const setFilters = useCallback((f: Partial<Filters>) => {
@@ -250,17 +251,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Auth
-  const requestOtp = useCallback(async (phone: string): Promise<string> => {
+  const requestOtp = useCallback(async (phone: string, email: string, name: string): Promise<string> => {
     const code = String(Math.floor(100000 + Math.random() * 900000));
-    setOtpData({ phone, code });
+    setOtpData({ phone, email, code });
+    
+    // Send real email with OTP
+    const emailSent = await sendOTPEmail(email, code, name);
+    if (emailSent) {
+      addLog('email.otp', `OTP sent to ${email}`, 'ok', 500);
+    } else {
+      addLog('email.otp', `Email not configured - using demo mode`, 'run', 100);
+    }
+    
     await sleep(520);
     return code;
-  }, []);
+  }, [addLog]);
 
-  const verifyOtp = useCallback(async (phone: string, code: string, name: string): Promise<User> => {
-    if (!otpData || otpData.phone !== phone) throw new Error('No OTP was requested for this number.');
+  const verifyOtp = useCallback(async (phone: string, email: string, code: string, name: string): Promise<User> => {
+    if (!otpData || otpData.phone !== phone || otpData.email !== email) throw new Error('No OTP was requested for this account.');
     if (otpData.code !== String(code).trim()) throw new Error("That code doesn't match.");
-    const user: User = { id: uid('usr'), phone, name: name.trim() || 'Student', createdAt: nowISO() };
+    const user: User = { id: uid('usr'), phone, email, name: name.trim() || 'Student', createdAt: nowISO() };
     const session: Session = { userId: user.id, token: uid('tok'), expiresAt: Date.now() + 7 * 864e5 };
     dispatch({ type: 'SET_USER', user });
     dispatch({ type: 'SET_SESSION', session });
@@ -340,6 +350,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await step('notify.whatsapp', 'sending order confirmation', async () => {
       const body = `🍽️ *tray-it order confirmed*\n\nOrder *#${order.id}* · ${counter}\n${items.map(i => `• ${i.name} — ₹${i.price}`).join('\n')}\nTotal *₹${total}*\nPickup: ${slot}\n\nShow code *${order.code}* at the counter.`;
       await sendMessage('whatsapp', state.user ? '+91 ' + state.user.phone : '+91 ••••• •••••', body, 'order_placed', order.id);
+      
+      // Send email confirmation
+      if (state.user?.email) {
+        const emailSent = await sendOrderConfirmationEmail(
+          state.user.email,
+          state.user.name,
+          order.id,
+          items.map(i => i.name),
+          total,
+          counter,
+          order.code
+        );
+        if (emailSent) {
+          addLog('email.order', `Confirmation sent to ${state.user.email}`, 'ok', 400);
+        }
+      }
       return true;
     });
 
@@ -390,10 +416,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const confirmed = { ...order, status: 'CONFIRMED', paymentId: captured.id, history: [...order.history, { status: 'CONFIRMED', at: nowISO() }] };
     dispatch({ type: 'UPDATE_ORDER', order: confirmed });
 
-    await step('notify.receipt', 'sending receipt on WhatsApp + SMS', async () => {
+    await step('notify.receipt', 'sending receipt on WhatsApp + SMS + Email', async () => {
       const body = `✅ Payment received — ₹${total}\nOrder #${order.id}\nMethod: ${METHOD_LABELS[method]}\nRef: ${captured.reference}\n\nThanks for eating with tray-it! 🌿`;
       await sendMessage('whatsapp', state.user ? '+91 ' + state.user.phone : '', body, 'payment_receipt', order.id);
       await sendMessage('sms', state.user ? '+91 ' + state.user.phone : '', body, 'payment_receipt', order.id);
+      
+      // Send email receipt
+      if (state.user?.email) {
+        const emailSent = await sendPaymentReceiptEmail(
+          state.user.email,
+          state.user.name,
+          order.id,
+          total,
+          METHOD_LABELS[method],
+          captured.reference || ''
+        );
+        if (emailSent) {
+          addLog('email.receipt', `Receipt sent to ${state.user.email}`, 'ok', 350);
+        }
+      }
       return true;
     });
 

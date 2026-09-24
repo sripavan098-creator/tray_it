@@ -7,6 +7,7 @@ export function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
   const { requestOtp, verifyOtp, addToast } = useApp();
   const [step, setStep] = useState<'phone' | 'otp'>('phone');
   const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
   const [name, setName] = useState('');
   const [otp, setOtp] = useState('');
   const [devCode, setDevCode] = useState('');
@@ -19,11 +20,16 @@ export function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
       setError('Please enter a valid 10-digit mobile number.');
       return;
     }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setError('Please enter a valid email address.');
+      return;
+    }
     setLoading(true);
     try {
-      const code = await requestOtp(phone);
+      const code = await requestOtp(phone, email, name);
       setDevCode(code);
       setStep('otp');
+      addToast('📧 OTP sent', `Check your email at ${email}`, 'ok');
     } catch (err: any) {
       setError(err.message);
     }
@@ -38,7 +44,7 @@ export function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
     }
     setLoading(true);
     try {
-      await verifyOtp(phone, otp, name);
+      await verifyOtp(phone, email, otp, name);
       addToast('✅ Signed in', `Welcome${name ? ', ' + name : ''}!`, 'ok');
       onClose();
       reset();
@@ -51,6 +57,7 @@ export function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
   const reset = () => {
     setStep('phone');
     setPhone('');
+    setEmail('');
     setName('');
     setOtp('');
     setDevCode('');
@@ -69,7 +76,15 @@ export function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
 
         {step === 'phone' && (
           <div>
-            <label className="block font-semibold text-sm mt-3">Mobile number</label>
+            <label className="block font-semibold text-sm mt-3">Email address <span className="text-[var(--chili)]">*</span></label>
+            <input
+              type="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-lg border border-[#c9c2b3] font-sans text-sm bg-white mt-2 focus:border-[var(--chili)] focus:outline-none focus:ring-2 focus:ring-red-200"
+            />
+            <label className="block font-semibold text-sm mt-4">Mobile number</label>
             <div className="flex gap-2 items-start">
               <span className="px-3 py-2.5 bg-white border border-[#c9c2b3] rounded-lg font-mono text-sm mt-2">+91</span>
               <input
@@ -91,11 +106,11 @@ export function AuthModal({ isOpen, onClose }: { isOpen: boolean; onClose: () =>
               className="w-full px-3 py-2.5 rounded-lg border border-[#c9c2b3] font-sans text-sm bg-white mt-2 focus:border-[var(--chili)] focus:outline-none focus:ring-2 focus:ring-red-200"
             />
             <button className="btn btn-primary w-full mt-5" onClick={handleSendOtp} disabled={loading}>
-              {loading ? 'Sending...' : 'Send OTP'}
+              {loading ? 'Sending...' : 'Send OTP via Email'}
             </button>
             {error && <div className="mt-2 text-[var(--chili)] text-xs font-bold">{error}</div>}
             <p className="text-xs text-[#8a8072] mt-4 leading-relaxed">
-              By continuing you agree to receive order updates on WhatsApp and SMS. You can turn either channel off later in <strong>Account & consent</strong>.
+              We'll send a 6-digit OTP to your email. You can also receive order updates on WhatsApp and SMS. Turn either channel off later in <strong>Account & consent</strong>.
             </p>
           </div>
         )}
